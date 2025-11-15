@@ -1,6 +1,6 @@
-org 0x7e00
+org 0x200
 VGATmem equ 0xb800 ; VGA text mode buffer start
-screendim equ 1920 ; 24x80
+screendim equ 77fh ; 24*80-1
 
 xor ax, ax
 xor di, di
@@ -10,18 +10,26 @@ mov ds, ax
 mov es, ax
 mov ss, ax
 
-mov ax, 0x7e00
+mov ax, 0x200
 mov sp, ax
 mov bp, sp
 xor ax, ax
 
 main:
 	
+	 ; mov si, teststr
+	 ; mov ah, 47h
+	 ; mov bx, 3h
+	 ; call write_line
 
-	mov al, 40h ; @
-	mov ah, 1ch
-	mov bx, 0002h
-	call write_char
+	 ; mov al, 40h ; @
+	 ; mov ah, 1ch
+	 ; mov bx, 0002h
+	 ; call write_char
+
+	mov al, 20h ; ' '
+	mov ah, 07h
+	call fill_screen
 
 	mov dh, 00h
 	mov dl, 00h
@@ -34,8 +42,54 @@ main:
 jmp main
 
 
-; Expects ax(stringZ offset), bx (offset from top left), dl (bg|fg)
+; Expects si(strZ address), bx(offset from top left), ah(bg|fg)
+; Offset shouldn't be a power of two
 write_line:
+	push ax
+	push bx
+	push si
+
+	call set_es_to_vidmem
+
+	shl bx, 1
+	.loop:
+		mov al, [si]
+		cmp al, 0
+		je .done
+		mov [es:bx], ax
+
+		inc si
+		add bx, 2
+	jmp .loop
+
+	.done:
+	pop si
+	pop bx
+	pop ax
+ret
+
+
+; Expects ax([bg|fg],[char])
+fill_screen:
+	push bx
+	push cx
+	push es
+
+	call set_es_to_vidmem
+
+	mov bx, 0
+	.loop:
+		cmp bx, screendim
+		jge .done
+
+		mov [es:bx], ax
+		add bx, 2
+	jmp .loop
+
+	.done:
+	pop es
+	pop cx
+	pop bx
 ret
 
 
@@ -44,10 +98,7 @@ ret
 write_char:
 	push bx
 
-	push ax
-	mov ax, VGATmem
-	mov es, ax
-	pop ax
+	call set_es_to_vidmem
 
 	shl bx, 1
 
@@ -70,6 +121,18 @@ set_cursor:
 ret
 
 
+set_es_to_vidmem:
+	push ax
+	mov ax, VGATmem
+	mov es, ax
+	pop ax
+ret
+
+
+
+jmp main
+
+teststr db "Teststr", 0
 
 force_shutdown:
 	; int 15, ax 5307h (apm state)
