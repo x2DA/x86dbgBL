@@ -4,9 +4,10 @@ screendim equ 77fh ; 24*80-1, starting from the VGATmem
 regdumpoffs equ 641h ; 20 * 80 +1
 scrwidth equ 80
 
-mov ax, 0x200
-mov sp, ax
-mov bp, sp
+mov bp, stack_base
+mov sp, stack_top
+mov ax, cs
+mov ss, ax
 
 xor di, di
 xor si, si
@@ -14,12 +15,11 @@ xor ax, ax
 
 mov ds, ax
 mov es, ax
-mov ss, ax
 mov bx, ax
 mov cx, ax
 mov dx, ax
 
-call set_cursor
+;call set_cursor
 jmp main
 
 ; Data goes here
@@ -53,13 +53,13 @@ main:
 	mov si, cxtitle
 	mov bx, 20h ; 1919-10 (for reg+val), dec width times id of reg, where ax=1, bx=2...
 	
-	mov ax, 1234h
-	mov bx, 5678h
-	mov cx, 9abch
-	mov dx, 0deffh
-	push ax
+	mov ax, 0h
+	mov bx, 0h
+	mov cx, 0h
+	mov dx, 0h
+
+	call get_key
 	call dump_regs
-	pop ax
 
 	; Wait
 	push cx
@@ -143,9 +143,7 @@ dump_regs:
 	call dump_cx
 	inc bx
 
-	; FIXME
 	mov si, sptitle
-	;push sp
 	mov cx, sp
 	add cx, 8h ; Account for 4 pushes
 	call dump_cx
@@ -160,7 +158,6 @@ ret
 ;	BX (Offset from top left)
 dump_cx:
 	push ax
-	;push bx
 	push cx
 	push si
 	push es
@@ -373,6 +370,9 @@ sys_force_shutdown:
 
 jmp sys_force_shutdown
 
+stack_base:
+	times 200 db 58h
+stack_top:
 
 times 9216 - ($-$$) db 0 ; Pad out remaining 18 sectors
 
