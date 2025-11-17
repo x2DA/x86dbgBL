@@ -1,6 +1,8 @@
 org 0x200
 VGATmem equ 0xb800 ; VGA text mode buffer start
 screendim equ 77fh ; 24*80-1, starting from the VGATmem
+regdumpoffs equ 641h ; 20 * 80 +1
+scrwidth equ 80
 
 mov ax, 0x200
 mov sp, ax
@@ -23,7 +25,12 @@ jmp main
 ; Data goes here
 
 welcome db "Welcome!", 0
+axtitle db "ax=", 0
+bxtitle db "bx=", 0
 cxtitle db "cx=", 0
+dxtitle db "dx=", 0
+bptitle db "BP=", 0
+sptitle db "SP=", 0
 
 
 jmp main
@@ -46,8 +53,13 @@ main:
 	mov si, cxtitle
 	mov bx, 20h ; 1919-10 (for reg+val), dec width times id of reg, where ax=1, bx=2...
 	
-	mov cx, 0fe12h
-	call dump_cx
+	mov ax, 1234h
+	mov bx, 5678h
+	mov cx, 9abch
+	mov dx, 0deffh
+	push ax
+	call dump_regs
+	pop ax
 
 	; Wait
 	push cx
@@ -90,12 +102,65 @@ write_line:
 ret
 
 
-; TODO
+dump_regs:
+	push si
+	push bx
+	push cx
+	push cx
+	push bx
+
+	mov bx, regdumpoffs
+
+	mov si, axtitle
+	mov cx, ax
+	call dump_cx
+	inc bx
+
+	mov si, bxtitle
+	pop cx ; cx holds bx
+	call dump_cx
+	inc bx
+
+	add bx, scrwidth
+	sub bx, 10h ; account for being set at the next label + 1
+				; and that we're splitting newlines every 2
+	
+	mov si, cxtitle
+	pop cx ; bx
+	call dump_cx
+	inc bx
+	
+	mov si, dxtitle
+	mov cx, dx
+	call dump_cx
+	inc bx
+
+	add bx, scrwidth
+	sub bx, 10h
+
+	mov si, bptitle
+	mov cx, bp
+	call dump_cx
+	inc bx
+
+	; FIXME
+	mov si, sptitle
+	;push sp
+	mov cx, sp
+	add cx, 8h ; Account for 4 pushes
+	call dump_cx
+	pop cx
+	
+	pop bx
+	pop si
+ret
+
+
 ;	SI (Zero terminated title)
 ;	BX (Offset from top left)
 dump_cx:
 	push ax
-	push bx
+	;push bx
 	push cx
 	push si
 	push es
@@ -154,7 +219,7 @@ dump_cx:
 	pop es
 	pop si
 	pop cx
-	pop bx
+	;pop bx
 	pop ax
 ret
 
