@@ -12,39 +12,38 @@ mov ax, VGATmem
 mov es, ax ; Set ES to the text buffer, since we won't use it anywhere else
 
 
-xor bx, bx ; TODO: Figure what gets overwritten initially
-xor cx, cx ; And remove from here to save a few words
+xor cx, cx
 xor dx, dx
 
 mov ah, 02h
 int 10h ; Set real cursor to start
 
-xor ax, ax
+; AX & BX get overwritten from the start
+xor dx, dx
+xor cx, cx
 
-mov ds, ax
-mov ss, ax
+mov ds, cx
+mov ss, cx
 mov sp, 0x7c00
 ; Not setting si and di to 0 saves about 2 words
 ; Which I think outweights the space efficiency of using them.
-
-jmp main
-
-; ----
-; VARIABLES
-; ----
-
-cursor db 06h, 06h, 0ch, 00h ; Y,X, Color, Mode,Modifier
-; Cursor modes: 00 normal
-; Cursor controls: hjkl: left, down, up, right
-; space - toggle mode
-
 
 ; ----
 ; MAIN
 ; ----
 
 main:
-	call clear_screen
+; OUT[BX]: About 77fh.
+; OUT[AX]: 0720h. (Grey on white, space) 
+	mov bx, 0h
+	mov ax, 0720h
+	.loop:
+		mov [es:bx], ax
+		add bx, 2
+	cmp bx, scrdim
+	jl .loop ; Clear screen
+
+	;call clear_screen
 	call draw_cursor
 
 
@@ -56,9 +55,20 @@ main:
 
 	call handle_user_input
 
-	mov cx, 10d
-	call sys_wait
+	;mov dx, 1h
+	;mov ah, 86h
+	;int 15h ; sys wait
 jmp main
+
+; ----
+; VARIABLES
+; ----
+
+cursor db 06h, 06h, 8ch, 00h ; Y,X, Color, Mode,Modifier
+; Cursor modes: 00 normal
+; Cursor controls: hjkl: left, down, up, right
+; space - toggle mode
+
 
 ; ----
 ; FUNCTIONS
@@ -92,7 +102,6 @@ handle_user_input:
 	xor ah, ah
 	int 16h ; Read key into AL
 
-	; TODO: Optimize for space
 	cmp al, 'h'
 	je .left
 	cmp al, 'j'
@@ -105,32 +114,36 @@ handle_user_input:
 	je .togglemode
 	jmp .keyhandled
 
+	.loadcursor:
+		mov ax, [cursor]
+	ret
+
+
 	.left:
-		mov ah, [cursor+1]
-		sub ah, 01h
-		mov [cursor+1], ah
-	jmp .keyhandled
+		call .loadcursor
+		add ah, 0ffh
+	jmp .movkeyhandled
 	.down:
-		mov ah, [cursor]
-		add ah, 01h
-		mov [cursor], ah
-	jmp .keyhandled
+		call .loadcursor
+		add al, 01h
+	jmp .movkeyhandled
 	.up:
-		mov ah, [cursor]
-		sub ah, 01h
-		mov [cursor], ah
-	jmp .keyhandled
+		call .loadcursor
+		add al, 0ffh
+	jmp .movkeyhandled
 	.right:
-		mov ah, [cursor+1]
+		call .loadcursor
 		add ah, 01h
-		mov [cursor+1], ah
-	jmp .keyhandled
+	jmp .movkeyhandled
 
 	.togglemode:
 		mov ax, [cursor+2] ; toggle: ah mode, al color
-		xor ax, 0101h
+		xor ax, 0117h
 		mov [cursor+2], ax
 	jmp .keyhandled
+
+	.movkeyhandled:
+		mov [cursor], ax
 	.keyhandled:
 ret
 
@@ -200,6 +213,8 @@ nibble2asciihexval:
 	.done:
 ret
 
+; TODO: Write inverse for the above
+
 
 ; IN [BX]: Offset from top left.
 ; OUT[BX]: End of string offset + 1
@@ -245,43 +260,11 @@ dump_dx:
 ret
 
 
-; OUT[BX]: About 77fh.
-; OUT[AX]: 0720h. (Grey on white, space) 
-clear_screen:
-	mov bx, 0h
-	mov ax, 8720h
-	.loop:
-		mov [es:bx], ax
-		add bx, 2
-	cmp bx, scrdim
-	jl .loop
-ret
-
-
-
-; IN [CX]: Time in ms.
-; OUT[CX:DX]: Overwritten with time in microseconds.
-; Stops system for CX ms.
-sys_wait:
-	push ax
-
-	xchg ax, cx
-	mov cx, 1000d ; 1ms = 1k microsecs
-	mul cx ; [DX:AX] Holds the result, move to [CX:DX]
-
-	mov cx, dx
-	mov dx, ax
-
-	pop ax
-
-	mov ah, 86h
-	int 15h
-ret
-
 saveBufferSize db 50h ; CurrentWritten, MaxSize
 savebuffer:
-	times 50h db 2eh
-	saveBufferSZ db 00h
+	; XYppppSppppSrrrrZ (17 bytes - 11h)
+	; position, param, sign, param, sign, result, zero terminator
+	times 11h db 2eh
 savebufferEnd:
 
 times 510 - ($-$$) db 0 ; Pad rest of sector
