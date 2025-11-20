@@ -1,87 +1,129 @@
 org 0x7c00
 bits 16
+
+; ----
+; CONSTANTS
+; ----
+
 VGATmem equ 0xb800 ; VGA Text Mode Buffer Start
 scrdim equ 4000d ; (24*80)*2(bytes)
 scrwidth equ 80d
+bgclear equ 8f20h
 
 ; ----
 ; SETUP
 ; ----
 
-mov ax, VGATmem
-mov es, ax ; Set ES to the text buffer, since we won't use it anywhere else
+mov dx, VGATmem
+mov es, dx ; Do NOT change ES in any function
 
-
-xor cx, cx
 xor dx, dx
 
-mov ah, 02h
-int 10h ; Set real cursor to start
-
-; AX & BX get overwritten from the start
-xor dx, dx
-xor cx, cx
-
-mov ds, cx
-mov ss, cx
+mov ds, dx
+mov ss, dx
 mov sp, 0x7c00
-; Not setting si and di to 0 saves about 2 words
-; Which I think outweights the space efficiency of using them.
 
 ; ----
 ; MAIN
 ; ----
 
 main:
-; OUT[BX]: About 77fh.
-; OUT[AX]: 0720h. (Grey on white, space) 
+	; ---- Clear Screen ----
 	mov bx, 0h
-	mov ax, 0720h
+	mov ax, bgclear
 	.loop:
 		mov [es:bx], ax
 		add bx, 2
 	cmp bx, scrdim
-	jl .loop ; Clear screen
-
-	;call clear_screen
-	call draw_cursor
+	jl .loop
+	; ---- Clear Screen ----
 
 
-	mov si, savebuffer ; Show buffer
-	mov bx, 0018h
+	; ---- Draw Cursor ----
+	mov bx, [cursor] ; At
+	mov ah, [cursor+2] ; Color
+	call xy2dto1d
+	mov al, '=' ; Char
+	shl bx, 1
+	mov [es:bx], ax
+	shr bx, 1
+	; ---- Draw Cursor ----
+
+
+	; ---- Draw Buffer ----
+	mov si, savebuffer+2
+	mov bx, [savebuffer]
 	call xy2dto1d
 	call write_line
+	; ---- Draw Buffer ----
 
+	
+	; ---- Eval & Draw Buffer Result ----
+	mov bx, 0h ; First 4 digit hex
+	call dump_to_dx
+	mov ax, dx
+
+	mov bx, 6h
+	mov cl, [savebuffer+bx] ; Sign
+
+	push cx
+	mov bx, 5h ; Second 4 digit hex (+1 for sign)
+	call dump_to_dx
+	mov bx, dx
+	pop cx
+
+
+	cmp cl, '*'
+	je .op_multiply
+	cmp cl, '/'
+	je .op_divide
+	cmp cl, '+'
+	je .op_add
+	cmp cl, '-'
+	je .op_sub
+	jmp .op_done
+
+	.op_multiply:
+		mul bx
+	jmp .op_done
+	
+	.op_divide:
+		div bx
+	jmp .op_done
+	
+	.op_add:
+		add ax, bx
+	jmp .op_done
+
+	.op_sub:
+		sub ax, bx
+	jmp .op_done
+
+
+	.op_done:
+	mov bx, 0h
+
+	push dx
+	mov dx, ax
+	call dump_dx
+	pop dx
+	inc bx
+	call dump_dx
+	; ---- Eval & Draw Buffer Result ----
 
 	call handle_user_input
-
-	;mov dx, 1h
-	;mov ah, 86h
-	;int 15h ; sys wait
 jmp main
 
-; ----
-; VARIABLES
-; ----
-
-cursor db 06h, 06h, 8ch, 00h ; Y,X, Color, Mode,Modifier
-; Cursor modes: 00 normal
-; Cursor controls: hjkl: left, down, up, right
-; space - toggle mode
 
 
 ; ----
 ; FUNCTIONS
 ; ----
 
-; TODO: Implement basic hex calc
 
-
-; Note: Memory uses little endian
 ; IN [BH]: X hex
 ; IN [BL]: Y hex
 ; OUT[BX]: Offset from 00
-; TODO: Check for vid mem bounds, if we have enough space left in the sector
 xy2dto1d:
 	push ax
 	xor ax, ax
@@ -98,7 +140,7 @@ xy2dto1d:
 	pop ax
 ret
 
-;messes ax and cx
+;messes ax and bx
 handle_user_input:
 	xor ah, ah
 	int 16h ; Read key into AL
@@ -107,53 +149,19 @@ handle_user_input:
 	je .togglemode
 
 	mov ah, [cursor+3]
-	cmp ah, 1h
-	je .writemode
+	cmp ah, 1h ; Jump to writemode if the mode byte is set.
+	je .key_writemode
 
 	cmp al, 'h'
-	je .left
+	je .key_left
 	cmp al, 'j'
-	je .down
+	je .key_down
 	cmp al, 'k'
-	je .up
+	je .key_up
 	cmp al, 'l'
-	je .right
-	jmp .keyhandled
+	je .key_right
+	jmp .key_handled
 
-	.loadcursor:
-		mov ax, [cursor]
-	ret
-
-	.writemode:
-		xchg bx, cx
-		mov bx, [bufferwritten]
-		cmp bx, 10h
-		jle .inbuffer
-			mov bx, 2
-		.inbuffer:
-		mov [savebuffer+bx], al
-		add bx, 1
-		mov [bufferwritten], bx
-		xchg bx, cx
-	jmp .keyhandled
-
-
-	.left:
-		call .loadcursor
-		add ah, 0ffh
-	jmp .movkeyhandled
-	.down:
-		call .loadcursor
-		add al, 01h
-	jmp .movkeyhandled
-	.up:
-		call .loadcursor
-		add al, 0ffh
-jmp .movkeyhandled
-	.right:
-		call .loadcursor
-		add ah, 01h
-	jmp .movkeyhandled
 
 	.togglemode:
 		mov ax, [cursor+2] ; toggle: ah mode, al color
@@ -161,33 +169,48 @@ jmp .movkeyhandled
 		mov [cursor+2], ax
 
 		call .loadcursor
+		inc ah
 		mov [savebuffer], ax
-	jmp .keyhandled
+	jmp .key_handled
 
-	.movkeyhandled:
+	.key_writemode:
+		mov bx, [bufferwritten]
+		cmp bx, 0ah ; buffersize+1
+		jle .inbuffer
+			mov bx, 2 ; We're out of the buffer, re-set
+		.inbuffer:
+		mov [savebuffer+bx], al
+		add bx, 1
+		mov [bufferwritten], bx
+	jmp .key_handled
+
+
+
+	.loadcursor:
+		mov ax, [cursor]
+	ret
+
+	.key_left:
+		call .loadcursor
+		add ah, 0ffh
+	jmp .key_move_handled
+	.key_down:
+		call .loadcursor
+		add al, 01h
+	jmp .key_move_handled
+	.key_up:
+		call .loadcursor
+		add al, 0ffh
+	jmp .key_move_handled
+	.key_right:
+		call .loadcursor
+		add ah, 01h
+	jmp .key_move_handled
+
+
+	.key_move_handled:
 		mov [cursor], ax
-	.keyhandled:
-ret
-
-
-draw_cursor:
-	mov bx, [cursor] ; Position
-	push bx
-	mov dx, bx
-	mov bx, 0
-	call dump_dx
-	pop bx
-
-	mov ah, [cursor+2] ; Color
-	call xy2dto1d ; Convert from xy to x
-
-	mov al, '.'
-	inc cl
-	shl bx, 1
-	mov [es:bx], ax
-	shr bx, 1
-	add bx, 1
-
+	.key_handled:
 ret
 
 
@@ -213,17 +236,6 @@ write_line:
 ret
 
 
-; IN [AL]: Char.
-; IN [BX]: Offset from top left.
-; OUT[BX]: Offset +1 of initial offset.
-write_char:
-	shl bx, 1
-	mov [es:bx], al
-	shr bx, 1
-	add bx, 1
-ret
-
-
 ; IN [DHl]: Hex nibble to convert to ASCII.
 ; IN [DHh]: Zero
 ; OUT[DH]: ASCII output
@@ -235,30 +247,34 @@ nibble2asciihexbyte:
 	.done:
 ret
 
-
-; TODO: Write inverse for the above
-; What is sub dh, 30h (DHh = 0, DH = ascii 0-F)
-
+; Inverse of the above, OUT's become IN's and vice versa
+asciihexbyte2nibble:
+	sub dh, 30h
+	cmp dh, 0fh
+	jl .done
+	sub dh, 07h
+	.done:
+ret
 
 
 ; IN [BX]: Offset from top left.
 ; OUT[BX]: End of string offset + 1
-; OUT[AL]: Lower nibble of DL
 dump_dx:
+	shl bx, 1
 	jmp .start
 
 	.dump_nibble:
 		call nibble2asciihexbyte
 
-		mov al, dh
-		call write_char
+		mov [es:bx], dh
+		add bx, 2
 	ret
 
 	.start:
 	; High DH
 	push dx
 	and dh, 0xf0
-	shr dh, 4 ; cl = 0000xxxx
+	shr dh, 4 ; dh = 0000xxxx
 	call .dump_nibble
 	pop dx
 
@@ -282,15 +298,63 @@ dump_dx:
 	xchg dh, dl
 	call .dump_nibble
 	pop dx
+
+	shr bx, 1
 ret
 
 
+
+; ou [DHl]: Hex nibble to convert to ASCII.
+; ou [DHh]: Zero
+; in [DH]: ASCII output
+
+; in, bx, offset from base of first buffer
+dump_to_dx:
+	mov cx, 0h
+	add bx, 2h
+	jmp .start
+
+	.dump_ascii:
+		mov dh, [savebuffer+bx]
+		call asciihexbyte2nibble
+		inc bx
+	ret
+
+
+	.start:
+	call .dump_ascii
+	shl dh, 4
+	or ch, dh
+
+	call .dump_ascii
+	or ch, dh
+
+	call .dump_ascii
+	shl dh, 4
+	or cl, dh
+
+	call .dump_ascii
+	or cl, dh
+
+	mov dx, cx
+
+ret
+
+
+
+; ----
+; VARIABLES
+; ----
+
+cursor db 00h, 09h, 70h, 00h ; Y,X, Color, Mode,Modifier
+; Modes: 0 Normal, 1 Write
+
 savebuffer:
-	; XYppppSppppSrrrrZ (17 bytes - 11h)
-	; position, param, sign, param, sign, result, zero terminator
-	times 11h db 2eh
-bufferend db 00h
-bufferwritten db 02h
+	db 00h
+	db 0ah
+	times 09h db 2eh
+	db 00h
+	bufferwritten db 02h
 
 times 510 - ($-$$) db 0 ; Pad rest of sector
 dw 0xaa55
